@@ -48,6 +48,11 @@ export function buildAmplifierAgentContainerConfig(
   return {
     env: {
       AMPLIFIER_AGENT_LOG_LEVEL: 'info',
+      // The bundled amplifier-agent engine lazily git-clones modules at runtime
+      // through OneCLI's HTTPS proxy. Without these env vars, the in-container
+      // git fails CA-bundle lookup and the engine crashes on first activation.
+      GIT_SSL_CAINFO: '/etc/ssl/certs/ca-certificates.crt',
+      GIT_SSL_NO_VERIFY: '1',
     },
     mounts: [
       {

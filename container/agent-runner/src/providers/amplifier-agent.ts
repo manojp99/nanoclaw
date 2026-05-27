@@ -171,8 +171,18 @@ class AmplifierAgentQuery implements AgentQuery {
     const wireMcp = translateMcp(this.mergedMcp);
 
     let prompt = this.input.prompt;
+    let firstTurn = true;
 
     while (!this.aborted) {
+      // Prepend system instructions on the first turn only (not on resume
+      // or follow-ups). amplifier-agent-client-ts doesn't expose a
+      // systemPrompt parameter like the Claude SDK does, so we embed the
+      // instructions in the initial prompt. The host (NC) builds
+      // systemContext.instructions from the per-group CLAUDE.md.
+      if (firstTurn && this.input.systemContext?.instructions) {
+        prompt = `${this.input.systemContext.instructions}\n\n${prompt}`;
+      }
+      firstTurn = false;
       // ── Generate or reuse the sessionId for this turn. ──
       // Installed @0.2.0 SessionHandle does not expose `sessionId`; the engine
       // echoes whatever we pass in. We track our own copy here and use it as
@@ -251,7 +261,12 @@ class AmplifierAgentQuery implements AgentQuery {
           }
         }
       } catch (err) {
-        yield translateError(err);
+        const errEvent = translateError(err);
+        yield errEvent;
+        // Signal turn completion even though it ended in error. Without this,
+        // the host's stream never sees a `result` event and the turn hangs
+        // until the host watchdog kills the container (~2 min, exit 137).
+        yield { type: 'result', text: '' };
         stopTicker();
         this.active = null;
         return;
