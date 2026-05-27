@@ -190,6 +190,14 @@ function translateError(
 export function translate(ev: DisplayEvent, ctx: TranslateCtx): ProviderEvent[] {
   switch (ev.type) {
     case 'message':
+    case 'result':
+      // The installed amplifier-agent-client-ts (github:microsoft/amplifier-agent#main,
+      // post-task-5 SDK refresh) emits final reply text as { type: 'result', text: ... },
+      // NOT { type: 'message', ... } as earlier wrappers did. Without this case, the
+      // result event falls into the default branch, returns [{ type: 'activity' }],
+      // and the reply text is silently discarded — poll-loop's dispatchResultText
+      // never sees the <message to="…"> blocks, nothing is written to messages_out,
+      // and the user sees no reply.
       return [
         { type: 'activity' },
         { type: 'result', text: (ev as { text: string }).text },

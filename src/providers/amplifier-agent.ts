@@ -45,6 +45,21 @@ export function buildAmplifierAgentContainerConfig(
   // Pre-create the host dir so the bind mount is owned by the host user, not
   // by root (which is what Docker does when the source path doesn't exist).
   fs.mkdirSync(hostPath, { recursive: true });
+
+  // The amplifier-agent engine keeps two persistent caches inside the container.
+  // Both MUST be bind-mounted from the host; persisting only one and not the
+  // other is worse than persisting nothing (the prepared marker becomes stale,
+  // skips re-cloning, then the engine crashes looking for modules that aren't
+  // there).
+  //
+  //   /home/node/.cache/amplifier-agent/prepared/  — small metadata marker
+  //                                                  (manifest.json + prepared.pickle)
+  //   /home/node/.amplifier/cache/                  — actual cloned bundle modules
+  //                                                  (amplifier-module-* git repos, ~11MB)
+  const cachePath = path.join(DATA_DIR, 'amplifier-agent-cache', ctx.agentGroupId);
+  fs.mkdirSync(cachePath, { recursive: true });
+  const amplifierHomePath = path.join(DATA_DIR, 'amplifier-home', ctx.agentGroupId);
+  fs.mkdirSync(amplifierHomePath, { recursive: true });
   return {
     env: {
       AMPLIFIER_AGENT_LOG_LEVEL: 'info',
@@ -58,6 +73,16 @@ export function buildAmplifierAgentContainerConfig(
       {
         hostPath,
         containerPath: '/home/node/.local/state/amplifier-agent',
+        readonly: false,
+      },
+      {
+        hostPath: cachePath,
+        containerPath: '/home/node/.cache/amplifier-agent',
+        readonly: false,
+      },
+      {
+        hostPath: amplifierHomePath,
+        containerPath: '/home/node/.amplifier',
         readonly: false,
       },
     ],

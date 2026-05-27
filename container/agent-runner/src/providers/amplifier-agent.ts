@@ -203,11 +203,11 @@ class AmplifierAgentQuery implements AgentQuery {
             cwd: this.input.cwd,
             mcpServers: wireMcp,
             host: { capabilities: NC_HOST_CAPABILITIES },
-            approval: {
-              // A10: NC auto-allows all approvals.
-              onRequest: async () => ({ decision: 'allow' }),
-              timeoutMs: APPROVAL_TIMEOUT_MS,
-            },
+            // A10: Mode A v2 does NOT support mid-turn approval callbacks.
+            // Approvals are auto-allowed by the bundle's hooks-approval module.
+            // Do not pass approval.onRequest — the engine rejects it with
+            // "Mid-turn approval callbacks are not supported in v1" and the
+            // turn dies before any LLM call happens. Tracked upstream as WG-4.
           });
           break;
         } catch (err) {
