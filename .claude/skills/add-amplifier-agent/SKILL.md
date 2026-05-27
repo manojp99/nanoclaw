@@ -158,9 +158,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 RUN mkdir -p /opt/uv/cache && \
     UV_TOOL_BIN_DIR=/usr/local/bin UV_CACHE_DIR=/opt/uv/cache \
         GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt \
-        uv tool install \
+        uv tool install --with mcp \
         "amplifier-agent @ git+https://github.com/microsoft/amplifier-agent@${AMPLIFIER_AGENT_REF}" && \
-    chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin && \
+    chmod 755 /root && \
+    chmod -R 0777 /root/.local && \
     chmod -R a+rX /opt/uv && \
     chown -R node:node /opt/uv
 ```
@@ -168,7 +169,8 @@ RUN mkdir -p /opt/uv/cache && \
 **Key differences from upstream docs:**
 - `UV_CACHE_DIR=/opt/uv/cache` ensures the cache is in a known location (avoids permission issues with the default `~/.cache`)
 - `GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt` is required during `uv tool install` because uv shells out to `git clone`, and inside the container git can't find the CA bundle on its own. Without this, the install fails with `server certificate verification failed. CAfile: none CRLfile: none`.
-- `chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin` makes the actual binaries executable. `uv tool install` symlinks `/usr/local/bin/amplifier-agent` → `/root/.local/share/uv/tools/amplifier-agent/bin/amplifier-agent`; chmodding the symlink in `/usr/local/bin/` is a no-op — the real file under `/root/.local/share/uv/tools/.../bin/` is what needs the executable bit.
+- `--with mcp` installs the `mcp` Python package into the same isolated uv tool environment as the engine. The bundle includes `tool-mcp`, which imports `mcp`; without this, the engine crashes at session-init with `Module 'tool-mcp' failed validation: No module named 'mcp'` and the wire-protocol wrapper reports a misleading `Engine exited 1 without emitting a parseable §4.1 envelope`.
+- `chmod 755 /root && chmod -R 0777 /root/.local` is required because `/usr/local/bin/amplifier-agent` is a SYMLINK into `/root/.local/share/uv/tools/amplifier-agent/bin/`. The container's runtime user (NC spawns under the host UID, not the build-time `node` UID) needs to traverse `/root` itself AND have read+execute on the entire `.local` subtree. Narrowly chmodding the `bin/` directory is a no-op — UID-501 hits "Permission denied" on `/root` before it ever reaches the binary.
 - Bundle cache prepopulation (`amplifier-agent prepare`) is deferred to runtime to avoid permission constraints during build
 
 **(d)** After the existing `USER node` switch (around line 150), and BEFORE the existing `tini`/entrypoint block, create the runtime state directories:
@@ -282,7 +284,8 @@ grep -q "amplifier-agent-client-ts" container/agent-runner/package.json && echo 
 grep -q "AMPLIFIER_AGENT_REF" container/Dockerfile && echo "✓ Dockerfile ARG"
 grep -q "uv tool install" container/Dockerfile && echo "✓ UV tool install"
 grep -q "GIT_SSL_CAINFO" container/Dockerfile && echo "✓ Git SSL CA for install-time clone"
-grep -q "chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin" container/Dockerfile && echo "✓ Binary executable"
+grep -q "chmod 755 /root" container/Dockerfile && echo "✓ /root traversable for runtime UID"
+grep -q "uv tool install --with mcp" container/Dockerfile && echo "✓ mcp package installed for tool-mcp"
 grep -q "UV_CACHE_DIR=/opt/uv/cache" container/Dockerfile && echo "✓ Cache directory"
 
 cd container/agent-runner && bun test src/providers/amplifier-agent/event-translator.test.ts && cd -
@@ -303,5 +306,6 @@ After image rebuild, set `agent_provider = 'amplifier-agent'` on a test group an
 - If the engine errors with `provider-anthropic` activation failures, confirm `git clone` from `github.com/microsoft/*` works inside the container.
 - If bundle cache fails to populate, check that containers have outbound HTTPS access to github.com.
 - If approval-related errors appear, confirm the host adapter is NOT passing `approval.onRequest` (Mode A v2 contract).
-- If the binary is not executable (`/bin/sh: amplifier-agent: Permission denied`), the symlink at `/usr/local/bin/amplifier-agent` chmod is a no-op — chmod the real binaries directory: `chmod -R a+x /root/.local/share/uv/tools/amplifier-agent/bin`. Re-run `./container/build.sh` if needed.
+- If the binary returns `Permission denied`, the chmod on `/root` itself is too narrow. The container's runtime user (host UID via Docker Desktop on macOS, NOT the build-time `node` UID) needs `chmod 755 /root && chmod -R 0777 /root/.local` because `/usr/local/bin/amplifier-agent` is a symlink into `/root/.local/share/uv/tools/...`. Re-run `./container/build.sh` after correcting.
+- If the engine crashes at session-init with `Engine exited 1 without emitting a parseable §4.1 envelope` and a quick `docker exec <container> amplifier-agent run --fresh --debug 'hi'` reveals `Module 'tool-mcp' failed validation: No module named 'mcp'`, the `uv tool install` step is missing `--with mcp`. The bundle declares `tool-mcp` as a hard dependency but `uv tool install` does not pull bundle-module transitive deps.
 - If the build fails with `server certificate verification failed. CAfile: none CRLfile: none`, the `uv tool install` step is missing `GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt` on its RUN line. uv shells out to `git clone`, which can't find the CA bundle without that env var inside the container.
